@@ -79,6 +79,13 @@ TELEGRAM_CUSTOMER_MENU_CALLBACK = os.getenv(
     "TELEGRAM_CUSTOMER_MENU_CALLBACK", ""
 ).strip()
 
+CUSTOMER_EMAIL_RECEIPTS_ENABLED = os.getenv(
+    "CUSTOMER_EMAIL_RECEIPTS_ENABLED", "false"
+).lower() in ("1", "true", "yes", "on")
+CUSTOMER_EMAIL_RECEIPT_MAX_MB = float(
+    os.getenv("CUSTOMER_EMAIL_RECEIPT_MAX_MB", "10")
+)
+
 SMTP_HOST = os.getenv("SMTP_HOST")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER")
@@ -141,6 +148,10 @@ def validate_config():
     if TELEGRAM_CUSTOMER_RECEIPT_MAX_MB <= 0:
         raise ValueError(
             "TELEGRAM_CUSTOMER_RECEIPT_MAX_MB должен быть положительным."
+        )
+    if CUSTOMER_EMAIL_RECEIPT_MAX_MB <= 0:
+        raise ValueError(
+            "CUSTOMER_EMAIL_RECEIPT_MAX_MB должен быть положительным."
         )
     if STATE_RETENTION_DAYS < 1:
         raise ValueError("STATE_RETENTION_DAYS должен быть положительным числом.")
@@ -211,6 +222,20 @@ def validate_config():
             raise ValueError(
                 "TELEGRAM_CUSTOMER_ID_PATTERN должен содержать группу захвата "
                 r"с Telegram ID, например: \(ID\s+(\d{1,13})\)"
+            )
+    if CUSTOMER_EMAIL_RECEIPTS_ENABLED:
+        customer_email_missing = [
+            name for name, value in (
+                ("MOY_NALOG_RECEIPT_INN", MOY_NALOG_RECEIPT_INN),
+                ("SMTP_HOST", SMTP_HOST),
+                ("SMTP_USER", SMTP_USER),
+                ("SMTP_PASSWORD", SMTP_PASSWORD),
+            ) if not value
+        ]
+        if customer_email_missing:
+            raise ValueError(
+                "Для отправки чеков покупателям по email отсутствуют: "
+                + ", ".join(customer_email_missing)
             )
     if BACKUP_TARGET == "telegram" and not (
         TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID

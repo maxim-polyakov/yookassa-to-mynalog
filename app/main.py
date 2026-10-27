@@ -20,6 +20,7 @@ from customer_receipt_delivery import (
     CustomerReceiptDelivery,
     extract_telegram_user_id,
 )
+from customer_email_delivery import CustomerEmailReceiptDelivery
 
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 DATA_DIR = os.getenv("DATA_DIR", "data")
@@ -56,7 +57,20 @@ class SyncManager:
             refresh_token=refresh_token,
             on_refresh_token=self._save_refresh_token,
         )
-        if config.TELEGRAM_CUSTOMER_RECEIPTS_ENABLED:
+        if config.CUSTOMER_EMAIL_RECEIPTS_ENABLED:
+            self.customer_receipt_delivery = CustomerEmailReceiptDelivery(
+                inn=config.MOY_NALOG_RECEIPT_INN,
+                host=config.SMTP_HOST,
+                port=config.SMTP_PORT,
+                user=config.SMTP_USER,
+                password=config.SMTP_PASSWORD,
+                from_email=config.SMTP_FROM_EMAIL,
+                from_name=config.SMTP_FROM_NAME,
+                use_tls=config.SMTP_USE_TLS,
+                nalog_proxy=config.YOOKASSA_NALOG_PROXY,
+                max_bytes=int(config.CUSTOMER_EMAIL_RECEIPT_MAX_MB * 1024 * 1024),
+            )
+        elif config.TELEGRAM_CUSTOMER_RECEIPTS_ENABLED:
             self.customer_receipt_delivery = CustomerReceiptDelivery(
                 config.TELEGRAM_CUSTOMER_BOT_TOKEN,
                 config.MOY_NALOG_RECEIPT_INN,
@@ -567,6 +581,12 @@ class SyncManager:
     def _prepare_payment_workflow(self, payment):
         amount = Decimal(str(payment.amount.value))
         currency = getattr(payment.amount, "currency", None)
+        metadata = getattr(payment, "metadata", None) or {}
+        customer_email = (
+            metadata.get("customerEmail", "")
+            if hasattr(metadata, "get")
+            else ""
+        )
         description = config.INCOME_DESCRIPTION_TEMPLATE.format_map(
             build_template_vars(payment)
         )
@@ -582,6 +602,7 @@ class SyncManager:
             "created_at": payment.created_at,
             "description": description,
             "payment_description": payment.description or "",
+            "customer_email": str(customer_email or "").strip(),
             "telegram_user_id": extract_telegram_user_id(
                 payment.description, config.TELEGRAM_CUSTOMER_ID_PATTERN
             ),
@@ -725,13 +746,23 @@ class SyncManager:
     def _enqueue_customer_receipt(self, workflow, receipt_uuid):
         if not getattr(self, "customer_receipt_delivery", None):
             return
+        customer_email = workflow.get("customer_email")
+        if config.CUSTOMER_EMAIL_RECEIPTS_ENABLED:
+            if not customer_email or "@" not in customer_email:
+                logging.warning(
+                    "Платёж %s зарегистрирован, но email покупателя отсутствует.",
+                    workflow.get("payment_id", "unknown"),
+                )
+                return
+        else:
+            customer_email = None
         telegram_user_id = workflow.get("telegram_user_id")
-        if not telegram_user_id:
+        if not customer_email and not telegram_user_id:
             telegram_user_id = extract_telegram_user_id(
                 workflow.get("payment_description") or workflow.get("description"),
                 config.TELEGRAM_CUSTOMER_ID_PATTERN,
             )
-        if not telegram_user_id:
+        if not customer_email and not telegram_user_id:
             logging.warning(
                 "Платёж %s зарегистрирован, но Telegram ID не найден в описании.",
                 workflow.get("payment_id", "unknown"),
@@ -745,6 +776,7 @@ class SyncManager:
             "payment_id": workflow.get("payment_id"),
             "receipt_uuid": receipt_uuid,
             "telegram_user_id": telegram_user_id,
+            "customer_email": customer_email,
             "amount": workflow.get("amount"),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
@@ -780,9 +812,9 @@ class SyncManager:
                 job["failed_at"] = datetime.now(timezone.utc).isoformat()
                 counts["undeliverable"] += 1
                 logging.error(
-                    "Чек %s нельзя доставить пользователю Telegram %s: %s",
+                    "Чек %s нельзя доставить получателю %s: %s",
                     job.get("receipt_uuid"),
-                    job.get("telegram_user_id"),
+                    job.get("customer_email") or job.get("telegram_user_id"),
                     result.error,
                 )
             else:
