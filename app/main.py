@@ -1638,7 +1638,10 @@ def print_banner():
     email_status = colorize("✓ включён", "green") if email_on else colorize("· выключен", "gray")
     customer_receipts_status = (
         colorize("✓ включена", "green")
-        if config.TELEGRAM_CUSTOMER_RECEIPTS_ENABLED
+        if (
+            config.TELEGRAM_CUSTOMER_RECEIPTS_ENABLED
+            or config.CUSTOMER_EMAIL_RECEIPTS_ENABLED
+        )
         else colorize("· выключена", "gray")
     )
 
